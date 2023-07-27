@@ -39,4 +39,4 @@ COPY --from=build /build/target/release/hermes /app/bin/hermes
 
 # Run the app as a non-root user.
 USER hermes
-CMD ["/app/bin/hermes"]
+ENTRYPOINT ["/app/bin/hermes"]
