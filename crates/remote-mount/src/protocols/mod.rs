@@ -8,26 +8,26 @@ pub mod sshfs;
 use anyhow::Result;
 use async_trait::async_trait;
 
-/// `ProtocolHandler` is a trait that defines the common interface for various filesystem protocol handlers.
 #[async_trait]
-pub trait ProtocolHandler<'r> {
+pub trait Unmounted: ProtocolHandler + Send + Sync {
     /// Mounts the filesystem using the specified protocol.
     ///
     /// This method is responsible for performing the necessary steps to mount the filesystem according to the protocol's requirements.
-    /// It returns the standard output of the mount command if successful, or an error if the mount process fails.
-    async fn mount(&mut self) -> Result<String>;
+    async fn mount(self) -> Result<Box<dyn Mounted + Send + Sync>>;
+}
 
+#[async_trait]
+pub trait Mounted: ProtocolHandler + Send + Sync {
     /// Unmounts the mounted filesystem.
     ///
     /// This method is responsible for performing the necessary steps to unmount the filesystem.
-    /// It returns the standard output of the unmount command if successful, or an error if the unmount process fails.
-    async fn unmount(&mut self) -> Result<String>;
+    async fn unmount(self) -> Result<Box<dyn Unmounted + Send + Sync>>;
+}
 
-    /// Checks if the filesystem is currently mounted.
-    ///
-    /// Returns true if the filesystem is mounted, and false otherwise.
-    fn is_mounted(&self) -> bool;
-
+/// `ProtocolHandler` is a trait that defines the common interface for various filesystem protocol handlers.
+#[async_trait]
+// this trait should either have methods from Mounted or Unmounted, but never both
+pub trait ProtocolHandler {
     /// Checks for missing dependencies required for the protocol handler to work.
     ///
     /// Returns an option containing a vector of missing dependency names if any dependencies are missing,

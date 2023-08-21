@@ -1,11 +1,11 @@
 use super::{
     errors::{MountError, UnmountError},
-    Protocol, ProtocolHandler,
+    Mounted, Protocol, ProtocolHandler, Unmounted,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use log::{debug, info};
-use std::process::Output;
+use std::{marker::PhantomData, process::Output};
 use tokio::process::Command;
 
 const SSHFS_BIN: &str = "sshfs";
@@ -14,17 +14,20 @@ const SHELL_BIN: &str = "sh";
 
 pub const DEPENDENCIES: &[&str] = &[SSHFS_BIN, UMOUNT_BIN, SHELL_BIN];
 
+pub struct MountedState;
+pub struct UnmountedState;
+
 #[derive(Debug)]
-pub struct Sshfs {
-    mounted: bool,
+pub struct Sshfs<State = UnmountedState> {
     mountpoint: String,
     connection_string: String,
     options: String,
     password: String,
     extra_args: String,
+    state: PhantomData<State>,
 }
 
-impl Sshfs {
+impl<State> Sshfs<State> {
     pub fn new(
         mountpoint: String,
         connection_string: String,
@@ -33,12 +36,12 @@ impl Sshfs {
         extra_args: String,
     ) -> Self {
         Self {
-            mounted: false,
             mountpoint,
             connection_string,
             options,
             password,
             extra_args,
+            state: Default::default(),
         }
     }
 
@@ -66,8 +69,8 @@ impl Sshfs {
 }
 
 #[async_trait]
-impl ProtocolHandler<'_> for Sshfs {
-    async fn mount(&mut self) -> Result<String> {
+impl Unmounted for Sshfs<UnmountedState> {
+    async fn mount(self) -> Result<Box<dyn Mounted + Send + Sync>> {
         info!("Mounting filesystem at {}", self.mountpoint);
 
         if let Some(missing_deps) = self.missing_dependencies() {
@@ -75,10 +78,6 @@ impl ProtocolHandler<'_> for Sshfs {
                 "Unable to unmount filesystem, the following dependencies are missing or not in $PATH: {:#?}",
                 missing_deps
             );
-        }
-
-        if self.is_mounted() {
-            anyhow::bail!(MountError::AlreadyMounted);
         }
 
         let sshfs_location = which::which(SSHFS_BIN)
@@ -108,12 +107,21 @@ impl ProtocolHandler<'_> for Sshfs {
             anyhow::bail!(MountError::MountFailed(stderr.to_string()));
         }
 
-        self.mounted = true;
         info!("Successfully mounted filesystem at {}", self.mountpoint);
-        Ok(String::from_utf8_lossy(&proc.stdout).to_string())
+        Ok(Box::new(Sshfs::<MountedState> {
+            mountpoint: self.mountpoint,
+            connection_string: self.connection_string,
+            options: self.options,
+            password: self.password,
+            extra_args: self.extra_args,
+            state: Default::default(),
+        }))
     }
+}
 
-    async fn unmount(&mut self) -> Result<String> {
+#[async_trait]
+impl Mounted for Sshfs<MountedState> {
+    async fn unmount(self) -> Result<Box<dyn Unmounted + Send + Sync>> {
         info!("Unmounting filesystem at {}", self.mountpoint);
 
         if let Some(missing_deps) = self.missing_dependencies() {
@@ -121,10 +129,6 @@ impl ProtocolHandler<'_> for Sshfs {
                 "Unable to unmount filesystem, the following dependencies are missing or not in $PATH: {:#?}",
                 missing_deps
             );
-        }
-
-        if !self.is_mounted() {
-            anyhow::bail!(UnmountError::NotMounted);
         }
 
         let umount_location = which::which(UMOUNT_BIN)
@@ -143,15 +147,20 @@ impl ProtocolHandler<'_> for Sshfs {
             anyhow::bail!(UnmountError::UnmountFailed(stderr.to_string()));
         }
 
-        self.mounted = false;
         info!("Successfully unmounted filesystem at {}", self.mountpoint);
-        Ok(String::from_utf8_lossy(&proc.stdout).to_string())
+        Ok(Box::new(Sshfs::<UnmountedState> {
+            mountpoint: self.mountpoint,
+            connection_string: self.connection_string,
+            options: self.options,
+            password: self.password,
+            extra_args: self.extra_args,
+            state: Default::default(),
+        }))
     }
+}
 
-    fn is_mounted(&self) -> bool {
-        self.mounted
-    }
-
+#[async_trait]
+impl<State> ProtocolHandler for Sshfs<State> {
     fn missing_dependencies(&self) -> Option<Vec<String>> {
         debug!("Checking for missing dependencies from {:?}", DEPENDENCIES);
 

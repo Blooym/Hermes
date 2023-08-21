@@ -6,7 +6,7 @@ use dotenv::dotenv;
 use futures::stream::StreamExt;
 use hermes::protocols::get_protocol_handler;
 use hermes::{create_app, AppOptions};
-use remote_mount::protocols::ProtocolHandler;
+use remote_mount::protocols::Mounted;
 use signal_hook::consts::signal::*;
 use signal_hook_tokio::Signals;
 use std::net::SocketAddr;
@@ -125,18 +125,19 @@ async fn serve_remote(program_options: ProgramOptions, app_options: AppOptions) 
         exit(1);
     }
 
-    match protocol_handler.mount().await {
-        Ok(_) => {
+    let protocol_handler = match protocol_handler.mount().await {
+        Ok(protocol_handler) => {
             info!(
                 "Successfully mounted filesystem at {}",
                 &program_options.serve_dir
             );
+            protocol_handler
         }
         Err(e) => {
             error!("Failed to mount filesystem: {:#?}", e);
             exit(1);
         }
-    }
+    };
 
     let signals =
         Signals::new([SIGHUP, SIGTERM, SIGINT, SIGQUIT]).expect("Failed to register signals");
@@ -170,20 +171,13 @@ async fn handle_exit_on_signal(mut signals: Signals) {
 
 async fn handle_unmount_on_signal(
     mut signals: Signals,
-    mut mount_handler: Box<dyn ProtocolHandler<'_> + Send + Sync>,
+    protocol_handler: Box<dyn Mounted + Send + Sync>,
 ) {
     while let Some(signal) = signals.next().await {
         match signal {
-            SIGTERM | SIGINT | SIGQUIT => match mount_handler.unmount().await {
-                Ok(_) => {
-                    info!("Successfully unmounted filesystem");
-                    exit(0)
-                }
-                Err(e) => {
-                    error!("Failed to unmount filesystem: {:#?}", e);
-                    exit(1);
-                }
-            },
+            SIGTERM | SIGINT | SIGQUIT => {
+                protocol_handler.unmount();
+            }
             _ => unreachable!(),
         }
     }
